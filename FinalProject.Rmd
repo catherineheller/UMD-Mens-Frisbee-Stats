@@ -1,0 +1,151 @@
+Catherine Heller
+Jeremy Hess
+Rudra Menon
+
+Final Project CMSC320 2019
+
+```{r libraries, ECHO=FALSE}
+library(magrittr)
+library(rvest)
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(plotly)
+```
+
+
+
+```{r part 1, RESULTS=HIDE}
+stats <- read_csv("SpaceBastards-stats.csv")
+
+stats <- stats %>%
+  select("Date/Time", tournament = "Tournamemnt", opponent = "Opponent", time = "Point Elapsed Seconds", "Line", 
+         ourscore = "Our Score - End of Point", theirscore = "Their Score - End of Point", "Event Type", "Action", 
+         "Passer", rec = "Receiver", "Defender", p0 = "Player 0", p1 = "Player 1", p2 = "Player 2", p3 = "Player 3", p4 = "Player 4",
+         p5 = "Player 5", p6 = "Player 6")
+
+stats
+
+
+```
+
+```{r part 2}
+plusminus <- stats 
+# if Action is drop, make player the receiver, if there is no passer, make it the defender
+plusminus$Player <- ifelse(is.na(plusminus$Passer), plusminus$Defender,
+                           ifelse(plusminus$Action == "Drop", plusminus$rec, plusminus$Passer))
+
+# add state for 
+plusminus <- plusminus %>% rbind(plusminus %>%
+                                   filter(Action=="Goal") %>%
+                                   mutate(Action="Score", Player=rec))
+# count actions per player
+plusminus <- plusminus %>%
+  select(Player, Action, rec) %>%
+  group_by(Player) %>%
+  count(Action) %>%
+  select(Player, Action, n)
+
+rows <- dim(plusminus)[1]; plusminus <- plusminus[1:(rows - 6),] #Remove last 6 entries, not useful
+
+# reshape dataframe and remove "0" and "Anonymous
+plusminus <- plusminus%>% 
+  group_by(Player) %>%
+  spread(key="Action",value=n) %>% 
+  filter(Player != "0" &  Player != "Anonymous")
+plusminus[is.na(plusminus)] <- 0
+
+# add column for plu_minus
+plusminus$plus_minus <- plusminus$Callahan + plusminus$D + plusminus$Goal+ plusminus$Score - plusminus$Stall - plusminus$Throwaway - plusminus$Drop
+
+plusminus
+```
+```{r part 3}
+#calculate passing percentage
+passing<- plusminus %>% select(Player, Completions= "Catch", Assists="Goal", "Throwaway", "Stall")
+passing$pass_perc <- (passing$Completions + passing$Assists)/ (passing$Completions + passing$Assists + passing$Throwaway + passing$Stall) * 100
+passing
+
+  
+```
+
+```{r part 4}
+# group by point (differentiated by tournament, game, and score)
+points <- stats %>%
+  select(tournament, opponent, ourscore, theirscore, p0, p1, p2, p3, p4, p5, p6) %>%
+  group_by(tournament, opponent, ourscore, theirscore, p0, p1, p2, p3, p4, p5 ,p6) %>%
+  count()
+
+# count appearances of each name
+points <-points %>% 
+  ungroup() %>% 
+  select(p0, p1, p2, p3, p4, p5 ,p6)
+
+points_played <- as.data.frame(table(unlist(points)))
+points_played
+
+```
+
+``` {r part 5}
+plot1 <- plusminus
+plot1$points_played <- points_played$Freq
+plot1 <- plot1%>%
+  group_by(Player) %>%
+  summarise_all(funs(first(na.omit(.)))) %>%
+  select(Player, plus_minus, points_played)
+plot1$per_point <- plot1$plus_minus/ plot1$points_played
+```
+
+``` {r plot points_played to perpoint}
+plot <- plot1 %>% ggplot(mapping = aes(label=Player, x=per_point, y=points_played)) +
+  geom_point()+ 
+  geom_smooth(method=lm) 
+
+
+ggplotly(plot, tooltip = c("Player", "per_point","points_played"))
+```
+
+```{r get prediction}
+plot1$prediction <- predict(loess(points_played~per_point,plot1), plot1$per_point)
+plot1$diff<- abs(plot1$prediction - plot1$points_played)
+plot1$hyp <- plot1$diff < 50
+
+plot1
+```
+```{r hyp testing}
+n <- 31
+pa <- 0.5 
+ex <- pa
+var_x <- pa * ( 1 - pa) / n
+mean <- length(plot1$hyp[plot1$hyp==TRUE])/n
+
+std <- (sqrt(var_x))
+p_value <- 1-pnorm(mean,ex,std)
+p_value
+```
+``` {r plot points_played to plusminus}
+plot <- plot1 %>% ggplot(mapping = aes(label=Player, x=plus_minus, y=points_played)) +
+  geom_point()+ 
+  geom_smooth(method=lm) 
+
+
+ggplotly(plot, tooltip = c("Player", "plus_minus","points_played"))
+
+```
+``` {r plot points_played to passing_perc}
+pass_perc <- passing
+pass_perc$points_played <- points_played$Freq
+pass_perc <- pass_perc%>%
+  summarise_all(funs(first(na.omit(.)))) %>%
+  select(Player, pass_perc, points_played)
+pass_perc
+
+plot <- pass_perc %>% ggplot(mapping = aes(label=Player, x=pass_perc, y=points_played)) +
+  geom_point()+ 
+  geom_smooth(method=lm) 
+
+
+ggplotly(plot, tooltip = c("Player"))
+
+```
